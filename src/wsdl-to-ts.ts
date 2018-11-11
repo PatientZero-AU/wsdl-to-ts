@@ -1,5 +1,4 @@
 import * as soap from "soap";
-// import { diffLines } from "diff";
 
 export const nsEnums: { [k: string]: boolean } = {};
 
@@ -150,7 +149,8 @@ function wsdlTypeToInterfaceString(d: { [k: string]: any }, opts: IInterfaceOpti
                 const rawtype = v.substring(i).trim();
                 const colon = rawtype.indexOf(":");
                 if (colon !== -1) {
-                    r.push(p + ": " + rawtype.substring(colon + 1));
+                    const type = toTsPrimitive(rawtype.substring(colon + 1));
+                    r.push(p + ": " + type + ";");
                 } else {
                     r.push(p + ": " + rawtype);
                 }
@@ -171,101 +171,100 @@ function wsdlTypeToInterface(obj: { [k: string]: any }, typeCollector?: TypeColl
     return wsdlTypeToInterfaceString(wsdlTypeToInterfaceObj(obj, typeCollector), opts);
 }
 
-export function wsdl2ts(wsdlUri: string, opts?: IInterfaceOptions): Promise<ITypedWsdl> {
-    return new Promise<soap.Client>((resolve, reject) => {
-        soap.createClient(wsdlUri, {}, (err, client) => {
-            if (err) {
-                reject(err);
-            } else {
-                resolve(client);
-            }
-        });
-    }).then((client) => {
-        const r: ITypedWsdl = {
-            client,
-            files: {},
-            methods: {},
-            namespaces: {},
-            types: {},
-        };
-        const d = client.describe();
+export function wsdl2ts(wsdlUri: string, opts?: IInterfaceOptions): PromiseLike<ITypedWsdl> {
+    return soap.createClientAsync(wsdlUri, {})
+        .then((client: soap.Client) => {
+            const r: ITypedWsdl = {
+                client,
+                files: {},
+                methods: {},
+                namespaces: {},
+                types: {},
+            };
+            const d = client.describe();
 
-        for (const service of Object.keys(d)) {
-            for (const port of Object.keys(d[service])) {
-                const collector = new TypeCollector(port + "Types");
-                // console.log("-- %s.%s", service, port);
+            for (const service of Object.keys(d)) {
+                for (const port of Object.keys(d[service])) {
+                    const collector = new TypeCollector(port + "Types");
+                    // console.log("-- %s.%s", service, port);
 
-                if (!r.types[service]) {
-                    r.types[service] = {};
-                    r.methods[service] = {};
-                    r.files[service] = {};
-                    r.namespaces[service] = {};
-                }
-                if (!r.types[service][port]) {
-                    r.types[service][port] = {};
-                    r.methods[service][port] = {};
-                    r.files[service][port] = service + "/" + port;
-                    r.namespaces[service][port] = {};
-                }
-
-                for (let maxi = 0; maxi < 32; maxi++) {
-                    for (const method of Object.keys(d[service][port])) {
-                        // console.log("---- %s", method);
-
-                        wsdlTypeToInterface(d[service][port][method].input || {}, collector, opts);
-                        wsdlTypeToInterface(d[service][port][method].output || {}, collector, opts);
+                    if (!r.types[service]) {
+                        r.types[service] = {};
+                        r.methods[service] = {};
+                        r.files[service] = {};
+                        r.namespaces[service] = {};
+                    }
+                    if (!r.types[service][port]) {
+                        r.types[service][port] = {};
+                        r.methods[service][port] = {};
+                        r.files[service][port] = service + "/" + port;
+                        r.namespaces[service][port] = {};
                     }
 
-                    const reg = cloneObj(collector.registered);
-                    collector.registerCollected();
-                    const regKeys0: string[] = Object.keys(collector.registered);
-                    const regKeys1: string[] = Object.keys(reg);
-                    if (regKeys0.length === regKeys1.length) {
-                        let noChange = true;
-                        for (const rk of regKeys0) {
-                            if (collector.registered[rk] !== reg[rk]) {
-                                noChange = false;
+                    for (let maxi = 0; maxi < 32; maxi++) {
+                        for (const method of Object.keys(d[service][port])) {
+                            // console.log("---- %s", method);
+
+                            wsdlTypeToInterface(d[service][port][method].input || {}, collector, opts);
+                            wsdlTypeToInterface(d[service][port][method].output || {}, collector, opts);
+                        }
+
+                        const reg = cloneObj(collector.registered);
+                        collector.registerCollected();
+                        const regKeys0: string[] = Object.keys(collector.registered);
+                        const regKeys1: string[] = Object.keys(reg);
+                        if (regKeys0.length === regKeys1.length) {
+                            let noChange = true;
+                            for (const rk of regKeys0) {
+                                if (collector.registered[rk] !== reg[rk]) {
+                                    noChange = false;
+                                    break;
+                                }
+                            }
+                            if (noChange) {
                                 break;
                             }
                         }
-                        if (noChange) {
-                            break;
+                        if (maxi === 31) {
+                            console.warn("wsdl-to-ts: Aborted nested interface changes");
                         }
                     }
-                    if (maxi === 31) {
-                        console.warn("wsdl-to-ts: Aborted nested interface changes");
+
+                    const collectedKeys: string[] = Object.keys(collector.registered);
+                    if (collectedKeys.length) {
+                        const ns: { [k: string]: string } = r.namespaces[service][port][collector.ns] = {};
+                        for (const k of collectedKeys) {
+                            ns[k] = "export interface I" + k + " " + collector.registered[k];
+                        }
                     }
-                }
 
-                const collectedKeys: string[] = Object.keys(collector.registered);
-                if (collectedKeys.length) {
-                    const ns: { [k: string]: string } = r.namespaces[service][port][collector.ns] = {};
-                    for (const k of collectedKeys) {
-                        ns[k] = "export interface I" + k + " " + collector.registered[k];
+                    for (const method of Object.keys(d[service][port])) {
+
+                        r.types[service][port]["I" + method + "Input"] =
+                            wsdlTypeToInterface(d[service][port][method].input || {}, collector, opts);
+                        r.types[service][port]["I" + method + "Output"] =
+                            wsdlTypeToInterface(d[service][port][method].output || {}, collector, opts);
+                        r.methods[service][port][method] =
+                            "(input: I" + method + "Input, " +
+                            "cb: (err: any | null," +
+                            " result: I" + method + "Output," +
+                            " raw: string, " +
+                            " soapHeader: {[k: string]: any; }) => any, " +
+                            "options?: any, " +
+                            "extraHeaders?: any" +
+                            ") => void";
+
+                        r.methods[service][port][method + "Async"] =
+                            "(input: I" + method + "Input, " +
+                            "options?: any, " +
+                            "extraHeaders?: any" +
+                            ") => Promise<I" + method + "Output>";
                     }
-                }
-
-                for (const method of Object.keys(d[service][port])) {
-
-                    r.types[service][port]["I" + method + "Input"] =
-                        wsdlTypeToInterface(d[service][port][method].input || {}, collector, opts);
-                    r.types[service][port]["I" + method + "Output"] =
-                        wsdlTypeToInterface(d[service][port][method].output || {}, collector, opts);
-                    r.methods[service][port][method] =
-                        "(input: I" + method + "Input, " +
-                        "cb: (err: any | null," +
-                        " result: I" + method + "Output," +
-                        " raw: string, " +
-                        " soapHeader: {[k: string]: any; }) => any, " +
-                        "options?: any, " +
-                        "extraHeaders?: any" +
-                        ") => void";
                 }
             }
-        }
 
-        return r;
-    });
+            return r;
+        });
 }
 
 function cloneObj<T extends { [k: string]: any }>(a: T): T {
@@ -360,3 +359,44 @@ export function outputTypedWsdl(a: ITypedWsdl): Array<{ file: string, data: stri
     }
     return r;
 }
+
+function toTsPrimitive(xsdType: string): string {
+    xsdType = xsdType.replace(";", "");
+    for (const typeSpec of spec) {
+        const listOfXsdTypes = typeSpec[0].split(" ");
+        if (listOfXsdTypes.indexOf(xsdType) !== -1) {
+            return typeSpec[1];
+        }
+    }
+
+    return "any";
+}
+
+const spec = [
+    [
+        "boolean",
+        "boolean",
+    ],
+    [
+        "date dateTime",
+        "Date",
+    ],
+    [
+        "byte decimal double float int integer long short " +
+        "unsignedLong unsignedInt unsignedShort unsignedByte " +
+        "negativeInteger nonNegativeInteger nonPositiveInteger positiveInteger ",
+        "number",
+    ],
+    [
+        "Name NCName QName anyURI language normalizedString string token " +
+        "ENTITY ENTITIES ID IDREF IDREFS NMTOKEN NMTOKENS " +
+        "gDay gMonth gMonthDay gYear gYearMonth " +
+        "hexBinary base64Binary " +
+        "duration time",
+        "string",
+    ],
+    [
+        "anytype",
+        "any",
+    ],
+];

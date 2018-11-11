@@ -1,5 +1,4 @@
 import * as soap from "soap";
-// import { diffLines } from "diff";
 export const nsEnums = {};
 export class TypeCollector {
     constructor(ns) {
@@ -128,7 +127,8 @@ function wsdlTypeToInterfaceString(d, opts = {}) {
                 const rawtype = v.substring(i).trim();
                 const colon = rawtype.indexOf(":");
                 if (colon !== -1) {
-                    r.push(p + ": " + rawtype.substring(colon + 1));
+                    const type = toTsPrimitive(rawtype.substring(colon + 1));
+                    r.push(p + ": " + type + ";");
                 }
                 else {
                     r.push(p + ": " + rawtype);
@@ -151,16 +151,8 @@ function wsdlTypeToInterface(obj, typeCollector, opts) {
     return wsdlTypeToInterfaceString(wsdlTypeToInterfaceObj(obj, typeCollector), opts);
 }
 export function wsdl2ts(wsdlUri, opts) {
-    return new Promise((resolve, reject) => {
-        soap.createClient(wsdlUri, {}, (err, client) => {
-            if (err) {
-                reject(err);
-            }
-            else {
-                resolve(client);
-            }
-        });
-    }).then((client) => {
+    return soap.createClientAsync(wsdlUri, {})
+        .then((client) => {
         const r = {
             client,
             files: {},
@@ -232,6 +224,11 @@ export function wsdl2ts(wsdlUri, opts) {
                             "options?: any, " +
                             "extraHeaders?: any" +
                             ") => void";
+                    r.methods[service][port][method + "Async"] =
+                        "(input: I" + method + "Input, " +
+                            "options?: any, " +
+                            "extraHeaders?: any" +
+                            ") => Promise<I" + method + "Output>";
                 }
             }
         }
@@ -331,4 +328,42 @@ export function outputTypedWsdl(a) {
     }
     return r;
 }
+function toTsPrimitive(xsdType) {
+    xsdType = xsdType.replace(";", "");
+    for (const typeSpec of spec) {
+        const listOfXsdTypes = typeSpec[0].split(" ");
+        if (listOfXsdTypes.indexOf(xsdType) !== -1) {
+            return typeSpec[1];
+        }
+    }
+    return "any";
+}
+const spec = [
+    [
+        "boolean",
+        "boolean",
+    ],
+    [
+        "date dateTime",
+        "Date",
+    ],
+    [
+        "byte decimal double float int integer long short " +
+            "unsignedLong unsignedInt unsignedShort unsignedByte " +
+            "negativeInteger nonNegativeInteger nonPositiveInteger positiveInteger ",
+        "number",
+    ],
+    [
+        "Name NCName QName anyURI language normalizedString string token " +
+            "ENTITY ENTITIES ID IDREF IDREFS NMTOKEN NMTOKENS " +
+            "gDay gMonth gMonthDay gYear gYearMonth " +
+            "hexBinary base64Binary " +
+            "duration time",
+        "string",
+    ],
+    [
+        "anytype",
+        "any",
+    ],
+];
 //# sourceMappingURL=wsdl-to-ts.js.map
